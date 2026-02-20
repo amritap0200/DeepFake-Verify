@@ -90,3 +90,51 @@ def generate_gradcam(tensor):
     except Exception as e:
         print("GradCAM failed:", e)
         return None
+    
+
+def analyze_video(video_path):
+    start_time = time.time()
+
+    frame_paths = extract_frames(video_path)
+
+    scores = []
+    last_tensor = None
+
+    for frame_path in frame_paths:
+        img = cv2.imread(frame_path)
+        if img is None:
+            continue
+
+        face = detect_face(img)
+        if face is None:
+            continue
+
+        tensor = preprocess(face)
+        score = predict(tensor)
+
+        scores.append(score)
+        last_tensor = tensor
+
+    if len(scores) == 0:
+        return {
+            "type": "video",
+            "video_score": 0.5,
+            "status": "No Face Detected"
+        }
+
+    final_score = aggregate_scores(scores)
+
+    result = {
+        "type": "video",
+        "video_score": final_score,
+        "status": "Likely Fake" if final_score > 0.7 else "Likely Real"
+    }
+
+    if final_score > 0.7 and last_tensor is not None:
+        heatmap_path = generate_gradcam(last_tensor)
+        if heatmap_path:
+            result["heatmap"] = heatmap_path
+
+    print(f"[VIDEO] Score: {final_score:.3f} | Time: {time.time() - start_time:.2f}s")
+
+    return result
