@@ -50,3 +50,13 @@ def detect_face(image):
 
     face_crop = image[y1:y2, x1:x2]
     return face_crop
+
+def preprocess(face_img):
+    face_img = cv2.resize(face_img, (224, 224))
+    face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+    face_img = face_img.astype(np.float32) / 255.0
+
+    tensor = torch.tensor(face_img).permute(2, 0, 1).unsqueeze(0)
+
+    return tensor.to(DEVICE)
+
