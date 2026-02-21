@@ -1,96 +1,95 @@
-import subprocess
+import torch
 import librosa
 import numpy as np
-import torch
-import tempfile
+import subprocess
 import os
 
-# ------------------
-# CONSTANTS
-# ------------------
-SAMPLE_RATE = 16000
-N_MELS = 128
-N_FFT = 1024
-HOP_LENGTH = 512
-MAX_AUDIO_SECONDS = 8
-MAX_LEN = SAMPLE_RATE * MAX_AUDIO_SECONDS
+MODEL_PATH = "crnn_audio_fake.pth"
+SR = 16000
+MAX_LEN = SR * 8
 
-torch.set_num_threads(2)
+# --------------------
+# Load model
+# --------------------
+class CRNN(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.cnn = torch.nn.Sequential(
+            torch.nn.Conv2d(1, 16, 3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool2d(2),
 
-# ------------------
-# SAFE MP4 → WAV
-# ------------------
-def extract_wav(video_path: str, wav_path: str) -> bool:
-    """
-    Extract audio if present.
-    Works even if stream index is missing.
-    """
-    try:
-        subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-loglevel", "error",
-                "-i", video_path,
-                "-map", "0:a?",          # 🔥 SAFE MAP
-                "-vn",
-                "-ac", "1",
-                "-ar", str(SAMPLE_RATE),
-                wav_path
-            ],
-            check=True
+            torch.nn.Conv2d(16, 32, 3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool2d(2)
         )
+        self.rnn = torch.nn.GRU(32*32, 64, batch_first=True)
+        self.fc = torch.nn.Linear(64, 2)
 
-        return os.path.exists(wav_path) and os.path.getsize(wav_path) > 1024
+    def forward(self, x):
+        x = self.cnn(x)
+        b, c, f, t = x.shape
+        x = x.permute(0, 3, 1, 2).contiguous().view(b, t, -1)
+        x, _ = self.rnn(x)
+        x = x[:, -1, :]
+        return self.fc(x)
 
-    except subprocess.CalledProcessError:
-        return False
+model = CRNN()
+model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+model.eval()
 
-
-# ------------------
-# WAV → MEL
-# ------------------
-def wav_to_mel(wav_path: str):
-    audio, _ = librosa.load(wav_path, sr=SAMPLE_RATE)
-
+# --------------------
+# Utilities
+# --------------------
+def fix_length(audio):
     if len(audio) > MAX_LEN:
-        audio = audio[:MAX_LEN]
-    else:
-        audio = np.pad(audio, (0, MAX_LEN - len(audio)))
+        return audio[:MAX_LEN]
+    return np.pad(audio, (0, MAX_LEN - len(audio)))
+
+def wav_to_mel(path):
+    audio, _ = librosa.load(path, sr=SR)
+    audio = fix_length(audio)
 
     mel = librosa.feature.melspectrogram(
-        y=audio,
-        sr=SAMPLE_RATE,
-        n_mels=N_MELS,
-        n_fft=N_FFT,
-        hop_length=HOP_LENGTH
+        y=audio, sr=SR, n_mels=128, n_fft=1024, hop_length=512
     )
-
     mel = librosa.power_to_db(mel, ref=np.max)
     mel = np.nan_to_num(mel)
     mel = (mel - mel.mean()) / (mel.std() + 1e-6)
-    mel = librosa.util.fix_length(mel, size=128, axis=1)
 
     return torch.tensor(mel).unsqueeze(0).unsqueeze(0).float()
 
+# --------------------
+# Extract audio from video
+# --------------------
+def extract_audio(video_path, out_path="temp.wav"):
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-ac", "1",
+        "-ar", "16000",
+        out_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out_path
 
-# ------------------
-# MAIN ENTRY
-# ------------------
-def analyze_audio(video_path: str):
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp_wav:
-        ok = extract_wav(video_path, tmp_wav.name)
+# --------------------
+# Main inference
+# --------------------
+def analyze_audio(video_path):
+    wav_path = extract_audio(video_path)
 
-        if not ok:
-            return {
-                "audio_score": None,
-                "status": "skipped",
-                "reason": "No decodable audio stream"
-            }
+    mel = wav_to_mel(wav_path)
 
-        mel = wav_to_mel(tmp_wav.name)
+    with torch.no_grad():
+        logits = model(mel)
+        probs = torch.softmax(logits, dim=1)
+
+    fake_prob = probs[0][1].item()
+
+    os.remove(wav_path)
 
     return {
-        "audio_score": None,
-        "status": "processed",
-        "mel_shape": list(mel.shape)
+        "fake_probability": fake_prob,
+        "label": "Fake" if fake_prob > 0.5 else "Real"
     }
