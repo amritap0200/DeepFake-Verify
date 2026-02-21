@@ -4,28 +4,19 @@ import librosa
 import numpy as np
 import torch
 import time
+from pathlib import Path
 from backend.celery_app import celery
-from audio_model import CRNN
-from audio_model import load_audio_model
+from backend.audio_model import load_audio_model
 
 DEVICE = torch.device("cpu")
 torch.set_num_threads(2)
 
-TEMP_DIR = "temp_audio"
+BASE_DIR = Path(__file__).resolve().parent
+TEMP_DIR = BASE_DIR / "temp_audio"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 model, THRESHOLD = load_audio_model()
 
-model.to(DEVICE)
-model.eval()
-
-DEVICE = torch.device("cpu")
-torch.set_num_threads(2)
-
-TEMP_DIR = "temp_audio"
-os.makedirs(TEMP_DIR, exist_ok=True)
-
-model = CRNN()
 model.to(DEVICE)
 model.eval()
 
@@ -44,9 +35,12 @@ def extract_audio(video_path, output_path):
         output_path,
         "-y"
     ]
-    subprocess.run(cmd,stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-    check=True)
+    subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
     return output_path
 
 
@@ -81,10 +75,30 @@ def preprocess(mel_db):
 def analyze_audio(video_path):
 
     start = time.time()
+    resolved_video_path = Path(video_path)
+    if not resolved_video_path.exists():
+        candidate = BASE_DIR / video_path
+        if candidate.exists():
+            resolved_video_path = candidate
+        else:
+            return {
+                "type": "audio",
+                "audio_probability": 0.0,
+                "status": "Error",
+                "error": f"File not found: {video_path}",
+            }
 
-    wav_path = os.path.join(TEMP_DIR, "temp.wav")
+    wav_path = str(TEMP_DIR / "temp.wav")
 
-    extract_audio(video_path, wav_path)
+    try:
+        extract_audio(str(resolved_video_path), wav_path)
+    except subprocess.CalledProcessError:
+        return {
+            "type": "audio",
+            "audio_probability": 0.0,
+            "status": "Error",
+            "error": "ffmpeg failed to extract audio",
+        }
 
     audio, sr = load_audio(wav_path)
 
@@ -123,6 +137,6 @@ def analyze_audio(video_path):
     }
 
 
-@celery.task
+@celery.task(name="audio_service.task_audio_analysis")
 def task_audio_analysis(video_path):
     return analyze_audio(video_path)

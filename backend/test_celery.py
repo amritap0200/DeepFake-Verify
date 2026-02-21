@@ -7,11 +7,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from backend.video_service import task_video_analysis
 from backend.audio_service import task_audio_analysis
+from backend.metadata_service import task_metadata_analysis
 
 sample_path = str((Path(__file__).resolve().parent / "media" / "real_sample1.mp4"))
 
 video_task = task_video_analysis.delay(sample_path)
 audio_task = task_audio_analysis.delay(sample_path)
+meta = task_metadata_analysis.delay(sample_path)
 
 print("Video:", video_task.get())
 print("Audio:", audio_task.get())
+print("Metadata:", meta.get(timeout=20))

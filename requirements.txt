@@ -4,3 +4,8 @@ numpy
 opencv-python
 facenet-pytorch
 grad-cam
+celery
+redis
+librosa
+Pillow
+ImageHash

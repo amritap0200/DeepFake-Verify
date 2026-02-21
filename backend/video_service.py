@@ -4,21 +4,23 @@ import torch
 import numpy as np
 import subprocess
 import time
+from pathlib import Path
 from backend.celery_app import celery
 from facenet_pytorch import MTCNN
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
 
-from video_model import load_model
-from utils import DEVICE
+from backend.video_model import load_model
+from backend.utils import DEVICE
 
 
 model ,THRESHOLD= load_model()
 model.to(DEVICE)
 model.eval()
 
-TEMP_DIR = "temp"
+BASE_DIR = Path(__file__).resolve().parent
+TEMP_DIR = BASE_DIR / "temp"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 #frame extraction
@@ -32,10 +34,14 @@ def extract_frames(video_path):
         "-i", video_path,
         "-vf", "fps=1",
         "-frames:v", "5",
-        f"{TEMP_DIR}/frame_%03d.jpg"
+        str(TEMP_DIR / "frame_%03d.jpg")
     ]
 
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = subprocess.run(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
+    )
+    if result.returncode != 0:
+        return []
 
     frames= sorted([os.path.join(TEMP_DIR, f)
                      for f in os.listdir(TEMP_DIR)
@@ -105,8 +111,20 @@ def generate_gradcam(tensor):
 
 def analyze_video(video_path):
     start_time = time.time()
+    resolved_video_path = Path(video_path)
+    if not resolved_video_path.exists():
+        candidate = BASE_DIR / video_path
+        if candidate.exists():
+            resolved_video_path = candidate
+        else:
+            return {
+                "type": "video",
+                "video_score": 0.0,
+                "status": "Error",
+                "error": f"File not found: {video_path}",
+            }
 
-    frame_paths = extract_frames(video_path)
+    frame_paths = extract_frames(str(resolved_video_path))
 
     scores = []
     last_tensor = None
@@ -152,6 +170,6 @@ def analyze_video(video_path):
 
 
 
-@celery.task
+@celery.task(name="video_service.task_video_analysis")
 def task_video_analysis(video_path):
     return analyze_video(video_path)

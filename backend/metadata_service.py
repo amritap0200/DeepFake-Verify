@@ -2,16 +2,15 @@ import os
 import json
 import hashlib
 import subprocess
-
-from PIL import Image
-import imagehash
+from pathlib import Path
 
 # ------------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------------
 
-TEMP_DIR = "temp_meta"
-HASH_DB = "hash_db.json"
+BASE_DIR = Path(__file__).resolve().parent
+TEMP_DIR = BASE_DIR / "temp_meta"
+HASH_DB = BASE_DIR / "hash_db.json"
 
 os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -35,19 +34,19 @@ def compute_sha256(video_path):
 # ------------------------------------------------------------------
 
 def extract_frame(video_path):
-    frame_path = os.path.join(TEMP_DIR, "frame.jpg")
+    frame_path = TEMP_DIR / "frame.jpg"
 
     command = [
         "ffmpeg",
         "-i", video_path,
         "-frames:v", "1",
-        frame_path,
+        str(frame_path),
         "-y"
     ]
 
     subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    return frame_path
+    return str(frame_path)
 
 
 # ------------------------------------------------------------------
@@ -55,6 +54,9 @@ def extract_frame(video_path):
 # ------------------------------------------------------------------
 
 def compute_phash(image_path):
+    from PIL import Image
+    import imagehash
+
     img = Image.open(image_path)
     phash_value = str(imagehash.phash(img))
     return phash_value
@@ -65,10 +67,12 @@ def compute_phash(image_path):
 # ------------------------------------------------------------------
 
 def check_recycled(phash_value):
-    if not os.path.exists(HASH_DB):
+    import imagehash
+
+    if not HASH_DB.exists():
         return False
 
-    with open(HASH_DB, "r") as f:
+    with HASH_DB.open("r") as f:
         db = json.load(f)
 
     current_hash = imagehash.hex_to_hash(phash_value)
@@ -84,15 +88,15 @@ def check_recycled(phash_value):
 
 
 def store_hash(phash_value):
-    if os.path.exists(HASH_DB):
-        with open(HASH_DB, "r") as f:
+    if HASH_DB.exists():
+        with HASH_DB.open("r") as f:
             db = json.load(f)
     else:
         db = []
 
     db.append(phash_value)
 
-    with open(HASH_DB, "w") as f:
+    with HASH_DB.open("w") as f:
         json.dump(db, f)
 
 
@@ -118,10 +122,34 @@ def extract_basic_metadata(video_path):
 # ------------------------------------------------------------------
 
 def analyze_metadata(video_path):
+    try:
+        import imagehash  # noqa: F401
+        from PIL import Image  # noqa: F401
+    except ImportError as e:
+        return {
+            "type": "metadata",
+            "metadata_score": 0.0,
+            "recycled": False,
+            "error": f"Missing dependency: {e}. Install Pillow and ImageHash.",
+        }
 
-    sha = compute_sha256(video_path)
 
-    frame = extract_frame(video_path)
+    resolved_video_path = Path(video_path)
+    if not resolved_video_path.exists():
+        candidate = BASE_DIR / video_path
+        if candidate.exists():
+            resolved_video_path = candidate
+        else:
+            return {
+                "type": "metadata",
+                "metadata_score": 0.0,
+                "recycled": False,
+                "error": f"File not found: {video_path}",
+            }
+
+    sha = compute_sha256(str(resolved_video_path))
+
+    frame = extract_frame(str(resolved_video_path))
 
     phash_value = compute_phash(frame)
 
@@ -133,7 +161,7 @@ def analyze_metadata(video_path):
     if recycled:
         score += 0.4
 
-    metadata_json = extract_basic_metadata(video_path)
+    metadata_json = extract_basic_metadata(str(resolved_video_path))
 
     # cleanup frame
     if os.path.exists(frame):
@@ -151,8 +179,8 @@ def analyze_metadata(video_path):
 
     return result
 
-from celery_app import celery
+from backend.celery_app import celery
 
-@celery.task
+@celery.task(name="metadata_service.task_metadata_analysis")
 def task_metadata_analysis(video_path):
     return analyze_metadata(video_path)
