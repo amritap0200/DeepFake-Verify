@@ -22,3 +22,5 @@ __pycache__/
 *.pth
 dump.rdb
 *.rdb
+
+backend/test_full_pipeline.py
