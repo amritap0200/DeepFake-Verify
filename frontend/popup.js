@@ -6,6 +6,7 @@ const analyzeBtn = document.getElementById("analyzeBtn");
 const fileInput = document.getElementById("videoInput");
 const probabilityEl = document.getElementById("probability");
 const arrowEl = document.getElementById("arrow");
+const fakenessEl = document.getElementById("fakenessValue");
 
 function updateGauge(value) {
   if (!probabilityEl || !arrowEl) return;
@@ -13,6 +14,17 @@ function updateGauge(value) {
   const angle = -90 + (clamped / 100) * 180;
   arrowEl.style.transform = `rotate(${angle}deg)`;
   probabilityEl.innerText = `${Math.round(clamped)}%`;
+}
+
+function setResultValues(score01) {
+  const score = Math.max(0, Math.min(1, Number(score01) || 0));
+  const percent = score * 100;
+  // Animate from 0 to target for a visible needle movement each run.
+  updateGauge(0);
+  requestAnimationFrame(() => updateGauge(percent));
+  if (fakenessEl) {
+    fakenessEl.innerText = `Fakeness: ${percent.toFixed(1)}%`;
+  }
 }
 
 chooseBtn.onclick = () => {
@@ -32,6 +44,7 @@ analyzeBtn.onclick = async () => {
   }
 
   statusEl.innerText = "Starting analysis...";
+  setResultValues(0);
 
   try {
     const formData = new FormData();
@@ -49,6 +62,7 @@ analyzeBtn.onclick = async () => {
     const data = await res.json();
     if (typeof data.final_score !== "undefined") {
       statusEl.innerText = `Final: ${data.verdict} (${data.final_score})`;
+      setResultValues(data.fakeness_score ?? data.final_score);
     } else {
       statusEl.innerText = "Analysis completed";
     }
